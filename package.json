@@ -1,0 +1,40 @@
+{
+  "name": "dsh-self-upgrade",
+  "version": "1.0.0",
+  "description": "In-place self-upgrade for the DeepSeek Harness agent: official GitHub Releases detection with notes, automatic backup, npm upgrade/rollback, credential compat flattening on downgrade, idle-aware auto-restart, model tools plus a settings panel.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raomaiping-hash/dsh-self-upgrade.git"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-bundle",
+    "plugin",
+    "self-update",
+    "upgrade",
+    "maintenance"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

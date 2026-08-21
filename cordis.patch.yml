@@ -1,0 +1,5 @@
+# dsh-self-upgrade bundle patch: 把插件插入 profile 组合层。
+- insert:
+    - id: dsh-self-upgrade
+      name: 'dsh-self-upgrade'
+      config: {}
