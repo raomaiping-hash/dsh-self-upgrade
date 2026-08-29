@@ -215,6 +215,43 @@ def clean_vendor_pollution(src):
     return removed
 
 
+def dereference_source_links(deploy, src):
+    """pnpm deploy 对 workspace link 依赖（schemastery/cosmokit/dsh 等）会生成
+    指向源码目录的绝对路径 symlink，部署到其他机器/位置后失效。把它们替换为
+    实体复制（读源码目录的构建产物）。为提速：同一目标只复制一次到
+    node_modules/.dsh-real/<name>，其余链接改为指向该实体的相对链接。"""
+    top = os.path.join(deploy, 'node_modules')
+    real_root = os.path.join(top, '.dsh-real')
+    cache = {}   # realpath -> 实体绝对路径
+    fixed = 0
+    for dirpath, dirnames, filenames in os.walk(top):
+        for n in list(dirnames):
+            p = os.path.join(dirpath, n)
+            if not os.path.islink(p):
+                continue
+            t = os.readlink(p)
+            if 'dsh-src-build' not in t and src not in t:
+                continue
+            real = os.path.realpath(p)
+            if not os.path.isdir(real):
+                continue
+            if real not in cache:
+                rel_name = os.path.basename(real)
+                dst = os.path.join(real_root, rel_name)
+                if not os.path.isdir(dst):
+                    os.makedirs(real_root, exist_ok=True)
+                    shutil.copytree(real, dst, dirs_exist_ok=True,
+                                    symlinks=False)
+                cache[real] = dst
+            os.unlink(p)
+            # 链接目标是相对链接所在目录的路径
+            os.symlink(os.path.relpath(cache[real], dirpath), p)
+            fixed += 1
+    if fixed:
+        print(f'  解引用源码链接: {fixed} 个（实体缓存 {len(cache)}）', flush=True)
+    return fixed
+
+
 def main():
     args = sys.argv[1:]
     target = None
@@ -263,6 +300,7 @@ def main():
 
     fill_missing_workspace_pkgs(src, deploy)
     link_third_party_deps(src, deploy)
+    dereference_source_links(deploy, src)
     verify_deploy(deploy, target)
 
     print(f'完成: {deploy} ({time.time()-t0:.0f}s)', flush=True)
