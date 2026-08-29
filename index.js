@@ -604,21 +604,34 @@ export function apply(ctx, config) {
       res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify(obj));
     };
-    // 面板 API 只允许本机（Host 为 loopback）访问：这些路由能触发本体升级与
-    // 重启，且 rgate 无法遮蔽本插件的 exact 路由（重复注册会抛错），故在
-    // 处理器内自检。远程管理请通过登录后的 agent 会话（dsh_upgrade_* 工具）。
+    // 面板 API 访问控制：允许 loopback 与本机可信 Host 列表（与服务
+    // --trusted-host 保持一致：LAN IP、tailscale 域名、公网域名）。
+    // 这些路由能触发本体升级与重启，白名单之外的 Host 一律 403；
+    // 远程管理仍可走登录后的 agent 会话（dsh_upgrade_* 工具）。
+    const ALLOWED_HOSTS = [
+      '127.0.0.1', 'localhost', '::1',
+      '192.168.1.12', '192.168.1.3', '192.168.1.5',
+      '192.168.31.168', '192.168.31.237', '192.168.5.25',
+      '100.124.102.103',
+      'rmp-n100', 'rmp-n100.tail4098df.ts.net', 'deepseek.raomaiping.host',
+    ].map((x) => String(x).trim().toLowerCase());
     const isLoopbackHost = (h) => {
       let s = String(h || '').trim().toLowerCase();
       if (s === '') return false;
       const slash = s.indexOf('/');
       if (slash >= 0) s = s.slice(0, slash);
-      if (s.startsWith('[')) { const c = s.indexOf(']'); if (c > 0) s = s.slice(1, c); }
-      else { const colon = s.lastIndexOf(':'); if (colon > 0 && /^\d+$/.test(s.slice(colon + 1))) s = s.slice(0, colon); }
-      if (s === 'localhost' || s === '::1' || s.startsWith('::ffff:127.')) return true;
-      if (s.startsWith('127.')) {
-        const parts = s.split('.');
-        return parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+      let hostOnly = s;
+      if (s.startsWith('[')) { const c = s.indexOf(']'); if (c > 0) hostOnly = s.slice(1, c); }
+      else { const colon = s.lastIndexOf(':'); if (colon > 0 && /^\d+$/.test(s.slice(colon + 1))) hostOnly = s.slice(0, colon); }
+      if (hostOnly === 'localhost' || hostOnly === '::1' || hostOnly.startsWith('::ffff:127.')) return true;
+      if (hostOnly.startsWith('127.')) {
+        const parts = hostOnly.split('.');
+        if (parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255)) return true;
       }
+      // 白名单：域名（如 rmp-n100.tail4098df.ts.net / deepseek.raomaiping.host）
+      // 与 LAN/tailscale IP 均放行；带端口形式（:443 / :3080）也放行。
+      if (ALLOWED_HOSTS.indexOf(hostOnly) >= 0) return true;
+      if (ALLOWED_HOSTS.indexOf(s) >= 0) return true;
       return false;
     };
     const route = (path, fn) => ctx.effect(() => webServer.register({
