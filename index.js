@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 // dsh-self-upgrade — DSH 本体自升级插件（常驻版）
 // 功能：官方 GitHub Releases 版本检测（含更新说明）、自动备份、npm 升级/回退、
@@ -22,6 +24,11 @@ const CONST = {
   registryUrl: 'https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest',
   packumentUrl: 'https://registry.npmjs.org/@deepseek-ai%2Fdsh',
   atomUrl: 'https://github.com/deepseek-ai/deepseek-harness/releases.atom',
+  // 源码构建回退：npm registry 尚无目标版本（GitHub 已发 tag）时，
+  // 用 build-from-source.py 从 GitHub tag 构建独立部署目录替换全局包。
+  gitRepo: 'https://github.com/deepseek-ai/deepseek-harness.git',
+  globalPkgDir: '/opt/node-v22.23.2-linux-x64/lib/node_modules/@deepseek-ai/dsh',
+  srcBuildWorkdir: '/var/tmp/dsh-build',   // 源码+构建缓存根（磁盘，勿放 tmpfs）
 };
 
 const FLATTEN_PY = `import sys, os, yaml
@@ -242,8 +249,36 @@ async function flattenCredentials() {
   return { status: 'error', detail: (('' + r.stderr) || ('exit ' + r.exitCode)).slice(0, 160) };
 }
 
+// 源码构建回退：当 npm registry 上没有目标版本（GitHub 已发 tag 但 npm 未
+// 同步，典型如 alpha/rc 预发布版）时，调用 build-from-source.py 从源码构建
+// 独立部署目录，并整体替换全局 @deepseek-ai/dsh。返回 { mode, deployDir, log }。
+async function buildFromSource(target) {
+  const workdir = CONST.srcBuildWorkdir + '-' + target;
+  const out = workdir + '/deploy';
+  const py = await bin('python3', '/usr/bin/python3');
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'build-from-source.py');
+  if (!fs.existsSync(script)) throw new Error('缺少构建脚本: ' + script);
+  log('源码构建安装: ' + CONST.gitRepo + ' @ ' + target);
+  const r = await sh(py + ' ' + script + ' ' + target + ' --workdir ' + workdir + ' --out ' + out, 3600 * 1000, 2 * 1024 * 1024);
+  if (r.exitCode !== 0) {
+    throw new Error('源码构建失败(exit ' + r.exitCode + ')：' + ((r.stdout || r.stderr) + '').slice(-500));
+  }
+  if (!fs.existsSync(out + '/lib/bin.js')) throw new Error('构建产物缺少 lib/bin.js: ' + out);
+  return { mode: 'source-build', deployDir: out };
+}
+
+// 把构建产物部署到全局：先备份旧包目录，再整体替换。
+async function deployFromSource(target, deployDir) {
+  const g = CONST.globalPkgDir;
+  const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+  const bak = CONST.backupDir + '/dsh-pkg-' + ts + '.tar.gz';
+  const r = await sh('sudo -n sh -c "mkdir -p ' + CONST.backupDir + ' && tar czf ' + bak + ' -C ' + path.dirname(g) + ' ' + path.basename(g) + ' && rm -rf ' + g + ' && mkdir -p ' + g + ' && cp -a ' + deployDir + '/. ' + g + '"', 600000);
+  if (r.exitCode !== 0) throw new Error('部署到全局失败：' + ((r.stderr || r.stdout) + '').slice(-300));
+  log('已替换全局包，备份: ' + bak);
+  return bak;
+}
+
 async function performUpgrade(opts) {
-  if (upgrading) throw new Error('upgrade already running');
   upgrading = true;
   state.phase = 'running'; state.startedAt = Date.now(); state.error = null; state.result = null; state.target = opts.target;
   try {
@@ -280,8 +315,24 @@ async function performUpgrade(opts) {
     const pe = 'http_proxy=' + CONST.proxy + ' https_proxy=' + CONST.proxy + ' HTTP_PROXY=' + CONST.proxy + ' HTTPS_PROXY=' + CONST.proxy + ' no_proxy=localhost,127.0.0.1';
     log('npm install -g ' + CONST.pkgName + '@' + opts.target);
     const inst = await sh('sudo -n env ' + pe + ' ' + npm + ' install -g ' + CONST.pkgName + '@' + opts.target + ' --no-audit --no-fund 2>&1 | tail -20', 900000);
-    if (inst.exitCode !== 0) throw new Error('npm 安装失败(exit ' + inst.exitCode + ')：' + (inst.stdout || inst.stderr).slice(-400));
-    log('npm 尾部输出: ' + inst.stdout.slice(-160).replace(/\s+/g, ' '));
+    const instOut = ((inst.stdout || '') + ' ' + (inst.stderr || ''));
+    if (inst.exitCode !== 0) {
+      // npm registry 尚无目标版本（GitHub 已发 tag 但 npm 未同步，如 alpha/rc
+      // 预发布版）时自动回退到源码构建安装，而不是直接失败。
+      const isNotarget = /ETARGET|notarget|No matching version found/i.test(instOut);
+      if (isNotarget) {
+        log('npm 上不存在 ' + opts.target + '（ETARGET），回退源码构建安装');
+        const built = await buildFromSource(opts.target);
+        state.stage = 'deploy';
+        const bak = await deployFromSource(opts.target, built.deployDir);
+        state.result = Object.assign(state.result || { action: 'upgrade' }, { installMode: 'source-build', backupPkg: bak });
+        log('源码构建部署完成: ' + built.deployDir);
+      } else {
+        throw new Error('npm 安装失败(exit ' + inst.exitCode + ')：' + instOut.slice(-400));
+      }
+    } else {
+      log('npm 尾部输出: ' + (inst.stdout || '').slice(-160).replace(/\s+/g, ' '));
+    }
     state.stage = 'verify';
     const now = await installedVersion();
     if (!now || cmpVer(now, opts.target) !== 0) {
