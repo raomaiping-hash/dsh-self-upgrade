@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -361,6 +362,26 @@ async function performUpgrade(opts) {
 }
 
 async function scheduleRestart(delay) {
+  // 容器/无 systemd 环境：宿主由外部或自替换方式拉起，不能依赖 systemd-run。
+  // 模式：延迟后 kill 自身进程，再原样 exec 当前 dsh web 命令（端口等参数保留）。
+  if (!fs.existsSync('/run/systemd/system')) {
+    try {
+      const argv = process.argv.slice(1).filter((x) => x !== '--no-open');
+      if (!argv.length || !fs.existsSync(argv[0])) {
+        log('容器重启：无法重建 dsh 启动命令（argv=' + JSON.stringify(process.argv) + '）');
+        return false;
+      }
+      const child = spawn('/bin/sh', ['-c', 'sleep ' + Math.max(1, Number(delay) || 5) +
+        '; kill ' + process.pid + ' 2>/dev/null; sleep 2; exec "$0" "$@"',
+        argv[0], ...argv.slice(1)], { detached: true, stdio: 'ignore' });
+      child.unref();
+      log('容器模式：已安排 ' + delay + ' 秒后自替换重启（无 systemd）');
+      return true;
+    } catch (e) {
+      log('容器重启失败：' + String((e && e.message) || e));
+      return false;
+    }
+  }
   const sctl = await bin('systemctl', '/usr/bin/systemctl');
   const srun = await bin('systemd-run', '/usr/bin/systemd-run');
   await sh('sudo -n ' + sctl + ' stop ' + CONST.restartUnit + '.timer ' + CONST.restartUnit + '.service');
