@@ -4,9 +4,9 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 // dsh-self-upgrade — DSH 本体自升级插件（常驻版）
-// 功能：官方 GitHub Releases 版本检测（含更新说明）、自动备份、npm 升级/回退、
-//       降级自动凭据兼容化（防 .credentials.yaml 格式迁移导致的启动循环）、
-//       延迟重启调度、模型工具 + 设置页可视面板。
+// 功能：官方 GitHub Releases 版本检测（含更新说明）、自动备份、npm 升级/
+//       源码构建安装（仅在目标高于当前版本时）、延迟重启调度、
+//       模型工具 + 设置页可视面板。
 
 export const name = "dsh-self-upgrade";
 // timer：自动更新的 30 分钟检查循环用 ctx.interval（0811 严格注入必须声明，
@@ -74,44 +74,12 @@ const CONST = {
   registryUrl: 'https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest',
   packumentUrl: 'https://registry.npmjs.org/@deepseek-ai%2Fdsh',
   atomUrl: 'https://github.com/deepseek-ai/deepseek-harness/releases.atom',
-  // 源码构建回退：npm registry 尚无目标版本（GitHub 已发 tag）时，
+  // 源码构建兜底：npm registry 尚无目标版本（GitHub 已发 tag）时，
   // 用 build-from-source.py 从 GitHub tag 构建独立部署目录替换全局包。
   gitRepo: 'https://github.com/deepseek-ai/deepseek-harness.git',
   globalPkgDir: DSH_GLOBAL_DIR,
   srcBuildWorkdir: process.env.DSH_BUILD_WORKDIR || '/var/tmp/dsh-build',   // 源码+构建缓存根（磁盘，勿放 tmpfs）
 };
-
-const FLATTEN_PY = `import sys, os, yaml
-p = sys.argv[1]
-d = yaml.safe_load(open(p, encoding='utf-8')) or {}
-if not isinstance(d, dict):
-    sys.exit(3)
-if 'refs' not in d and 'version' not in d:
-    print('already-flat')
-    sys.exit(0)
-out = {}
-for k, v in d.items():
-    if k in ('version', 'refs'):
-        continue
-    if isinstance(v, str):
-        out[k] = v
-refs = d.get('refs')
-if isinstance(refs, dict):
-    for k, v in refs.items():
-        if isinstance(v, str):
-            out[k] = v
-        elif isinstance(v, dict) and isinstance(v.get('value'), str):
-            out[k] = v['value']
-if not out:
-    sys.exit(4)
-st = os.stat(p)
-tmp = p + '.flat-tmp'
-with open(tmp, 'w', encoding='utf-8') as f:
-    yaml.safe_dump(out, f, sort_keys=True, default_flow_style=False, allow_unicode=True)
-os.chmod(tmp, st.st_mode & 0o777)
-os.replace(tmp, p)
-print('flattened:' + str(len(out)))
-`;
 
 const state = {
   phase: 'idle', stage: '', startedAt: null, target: null, error: null, result: null,
@@ -276,30 +244,7 @@ async function timerActive(sctl) {
   return (a.stdout || '').trim() === 'active';
 }
 
-async function flattenCredentials() {
-  const home = ((await sh('printf %s "$HOME"')).stdout || '').trim() || '/root';
-  const cred = home + '/.dsh/.credentials.yaml';
-  const ex = await sh('test -f ' + cred + ' && echo YES || echo NO');
-  if (ex.stdout.indexOf('YES') < 0) return { status: 'absent' };
-  const py = await bin('python3', '/usr/bin/python3');
-  const chk = await sh(py + ' -c "import yaml" 2>/dev/null');
-  if (chk.exitCode !== 0) return { status: 'no-pyyaml' };
-  const script = '/tmp/dsh-flatten-cred.py';
-  fs.writeFileSync(script, FLATTEN_PY, { mode: 0o700 });
-  const r = await sh(py + ' ' + script + ' ' + cred);
-  if (r.exitCode === 0) {
-    const out = (r.stdout || '').trim();
-    if (out === 'already-flat') return { status: 'already-flat' };
-    const m = /^flattened:(\d+)$/.exec(out);
-    if (m) return { status: 'flattened', keys: +m[1] };
-    return { status: out || 'unknown' };
-  }
-  if (r.exitCode === 4) return { status: 'error', detail: '结构化文件中未提取到任何凭据' };
-  if (r.exitCode === 3) return { status: 'error', detail: '文件不是映射结构' };
-  return { status: 'error', detail: (('' + r.stderr) || ('exit ' + r.exitCode)).slice(0, 160) };
-}
-
-// 源码构建回退：当 npm registry 上没有目标版本（GitHub 已发 tag 但 npm 未
+// 源码构建转安装：当 npm registry 上没有目标版本（GitHub 已发 tag 但 npm 未
 // 同步，典型如 alpha/rc 预发布版）时，调用 build-from-source.py 从源码构建
 // 独立部署目录，并整体替换全局 @deepseek-ai/dsh。返回 { mode, deployDir, log }。
 async function buildFromSource(target) {
@@ -335,12 +280,11 @@ async function performUpgrade(opts) {
     state.stage = 'preflight';
     const cur = await installedVersion();
     if (!cur) throw new Error('无法读取已安装版本（' + CONST.pkgJson + '）');
-    const isDowngrade = cmpVer(opts.target, cur) < 0;
-    log('current=' + cur + ' target=' + opts.target + ' force=' + !!opts.force + ' downgrade=' + isDowngrade);
+    log('current=' + cur + ' target=' + opts.target);
     const c = cmpVer(opts.target, cur);
-    if (c <= 0 && !opts.force) {
+    if (c <= 0) {
       state.phase = 'idle'; state.stage = '';
-      state.result = { action: 'none', reason: c === 0 ? '已是目标版本' : '目标版本低于当前版本（回退请用 force）', current: cur, target: opts.target };
+      state.result = { action: 'none', reason: c === 0 ? '已是目标版本' : '目标版本低于当前版本，不支持回退；请使用高于当前安装版本的版本号', current: cur, target: opts.target };
       return state.result;
     }
     if (!opts.skipBackup) {
@@ -358,7 +302,7 @@ async function performUpgrade(opts) {
         log('dsh-backup.sh 备份完成');
       }
       const ls = await sh('ls -t ' + CONST.backupDir + '/*.tar.gz 2>/dev/null | head -1');
-      state.result = { action: 'upgrade', backupPath: (ls.stdout || '').trim() || null, rollbackOf: isDowngrade };
+      state.result = { action: 'upgrade', backupPath: (ls.stdout || '').trim() || null };
     }
     state.stage = 'install';
     const npm = await npmExecCmd();
@@ -368,10 +312,10 @@ async function performUpgrade(opts) {
     const instOut = ((inst.stdout || '') + ' ' + (inst.stderr || ''));
     if (inst.exitCode !== 0) {
       // npm registry 尚无目标版本（GitHub 已发 tag 但 npm 未同步，如 alpha/rc
-      // 预发布版）时自动回退到源码构建安装，而不是直接失败。
+      // 预发布版）时转源码构建安装，而不是直接失败。
       const isNotarget = /ETARGET|notarget|No matching version found/i.test(instOut);
       if (isNotarget) {
-        log('npm 上不存在 ' + opts.target + '（ETARGET），回退源码构建安装');
+        log('npm 上不存在 ' + opts.target + '（ETARGET），转源码构建安装');
         const built = await buildFromSource(opts.target);
         state.stage = 'deploy';
         const bak = await deployFromSource(opts.target, built.deployDir);
@@ -386,17 +330,10 @@ async function performUpgrade(opts) {
     state.stage = 'verify';
     const now = await installedVersion();
     if (!now || cmpVer(now, opts.target) !== 0) {
-      throw new Error('升级后校验失败：磁盘版本 ' + now + ' ≠ 目标 ' + opts.target + '。回滚命令: sudo env ' + pe + ' ' + npm + ' i -g ' + CONST.pkgName + '@' + cur);
+      throw new Error('升级后校验失败：磁盘版本 ' + now + ' ≠ 目标 ' + opts.target + '。如需恢复当前版本，可手动执行: sudo env ' + pe + ' ' + npm + ' i -g ' + CONST.pkgName + '@' + cur);
     }
     log('校验通过: ' + now);
     state.result = Object.assign(state.result || { action: 'upgrade' }, { previous: cur, installed: now });
-    if (isDowngrade) {
-      state.stage = 'compat';
-      const fr = await flattenCredentials();
-      state.result.compat = fr;
-      log('凭据兼容化: ' + JSON.stringify(fr));
-      if (fr.status === 'error') throw new Error('凭据兼容化失败：' + fr.detail + '；为避免启动循环已中止，可先手动处理或用备份恢复。');
-    }
     if (!opts.skipRestart) {
       state.stage = 'restart-schedule';
       const ok = await scheduleRestart(delay);
@@ -493,14 +430,15 @@ async function startUpgrade(args) {
     if (!target) return { started: false, reason: '获取最新官方版本失败: ' + (state.releases.error || state.latest.error || 'unknown') };
   }
   const cur = await installedVersion();
-  const isDowngrade = !!(cur && cmpVer(target, cur) < 0);
+  if (cur && target && cmpVer(target, cur) <= 0) {
+    return { started: false, reason: '目标版本 ' + target + ' 不高于当前安装版本 ' + cur + '，不支持回退；请使用高于当前版本的官方发布版' };
+  }
   const delay = Math.max(2, Math.min(600, Number(args.restartDelaySec) || 5));
-  const opts = { target, restartDelaySec: delay, skipRestart: !!args.skipRestart, skipBackup: !!args.skipBackup, force: !!args.force || isDowngrade };
+  const opts = { target, restartDelaySec: delay, skipRestart: !!args.skipRestart, skipBackup: !!args.skipBackup };
   performUpgrade(opts).catch(function () {});
   return {
     started: true, target,
-    plan: (isDowngrade ? '回退' : '升级') + '：备份 → npm install -g → 校验' + (isDowngrade ? ' → 凭据兼容化' : '') + (opts.skipRestart ? '（不重启）' : (' → ' + delay + ' 秒后重启 ' + CONST.serviceUnit)),
-    warning: isDowngrade ? '检测到降级：将在重启前自动把凭据文件转为两版通用的扁平格式（防启动循环）；若新版还迁移过其他配置导致启动异常，请从 /var/backups/dsh/ 最新备份恢复对应文件。' : null,
+    plan: '升级：备份 → npm 安装/源码构建 → 校验' + (opts.skipRestart ? '（不重启）' : (' → ' + delay + ' 秒后重启 ' + CONST.serviceUnit)),
     note: '安装仅替换磁盘文件，不影响运行中进程；重启会结束当前会话并短暂中断 Web UI。',
   };
 }
@@ -616,13 +554,12 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'dsh_upgrade_run',
-    description: '升级/回退/重装 DSH agent 本体。默认目标为最新官方发布版（GitHub Releases）；回退传 version=<旧版本>（自动 force）。流程：备份 → npm 安装 → 校验 → 降级时自动扁平化凭据文件（防配置格式不兼容的启动循环）→ systemd-run 延迟重启 deepseek-harness.service。注意：安装只替换磁盘文件、不影响运行中进程；随后的重启会结束当前会话并短暂中断 Web UI（默认延迟 5 秒，近立即）。本工具立即返回，进度用 dsh_upgrade_status 轮询。',
+    description: '升级/重装 DSH 本体。默认目标为最新官方发布版（GitHub Releases）；version 可指定需高于当前安装版本的官方版本号（不支持回退到旧版）。流程：备份 → npm 安装（registry 缺失时源码构建）→ 校验 → systemd-run 延迟重启 deepseek-harness.service。注意：安装只替换磁盘文件、不影响运行中进程；随后的重启会结束当前会话并短暂中断 Web UI（默认延迟 5 秒，近立即）。本工具立即返回，进度用 dsh_upgrade_status 轮询。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        version: { type: 'string', description: '目标版本号（默认取最新官方发布版；传旧版本号即回退）' },
-        force: { type: 'boolean', description: '目标不高于当前版本时仍强制执行（回退时自动启用）' },
+        version: { type: 'string', description: '目标版本号（默认取最新官方发布版；必须高于当前安装版本，传旧版本号会被拒绝）' },
         restartDelaySec: { type: 'number', description: '重启延迟秒数，2–600，默认 5（近立即）' },
         skipRestart: { type: 'boolean', description: '只安装，不安排重启' },
         skipBackup: { type: 'boolean', description: '跳过升级前备份（不建议）' },
@@ -634,7 +571,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'dsh_upgrade_versions',
-    description: '列出官方 GitHub Releases 发布过的 DSH 版本（含日期、最新/当前安装标记、newer 标记与 notes 官方更新说明 HTML），用于选择升级/回退目标。只收录官方发布版，不含 npm 过渡构建。',
+    description: '列出官方 GitHub Releases 发布过的 DSH 版本（含日期、最新/当前安装标记、newer 标记与 notes 官方更新说明 HTML），用于查看可安装的官方版本。只收录官方发布版，不含 npm 过渡构建。',
     parameters: objSchema,
     output: { schema: { type: 'object' }, render: jsonRender },
     execute: async function () { return versionList() },

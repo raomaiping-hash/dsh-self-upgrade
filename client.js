@@ -86,10 +86,9 @@ window.__ModuleLoader__.load({ id: "dsh-self-upgrade", factory: (require) => {
 				const upToDate = !!(st && st.upToDate);
 				const res = st && st.job ? st.job.result : null;
 				const jobError = st && st.job ? st.job.error : null;
-				const stageMap = { preflight: "预检", backup: "备份配置", install: "安装新版本", verify: "校验", compat: "凭据兼容化", restartschedule: "安排重启" };
+				const stageMap = { preflight: "预检", backup: "备份配置", install: "安装新版本", verify: "校验", restartschedule: "安排重启" };
 				const stageKey = (st && st.job && st.job.stage) ? String(st.job.stage).replace(/-/g, "") : "";
 				const stageText = stageMap[stageKey] || "准备中";
-				const compatText = res && res.compat ? ("；凭据兼容化：" + (res.compat.status === "flattened" ? ("已自动扁平化(" + res.compat.keys + " 键)") : res.compat.status === "already-flat" ? "已是扁平格式" : String(res.compat.status))) : "";
 
 				const rows = [];
 				if (vers && vers.versions) {
@@ -102,10 +101,10 @@ window.__ModuleLoader__.load({ id: "dsh-self-upgrade", factory: (require) => {
 							v.version === vers.installed ? h("span", { className: "dsup-tag dsup-tag-cur" }, "当前") : null,
 							h("span", { className: "dsup-spacer" }),
 							v.notes ? h("button", { className: "dsup-btn dsup-btn-sm", onClick: function () { toggleNotes(v.version) } }, open[v.version] ? "收起说明" : "官方说明") : null,
-							v.version !== vers.installed ? h("button", {
+							v.version !== vers.installed && v.newer ? h("button", {
 								className: "dsup-btn dsup-btn-sm", disabled: busy || running,
-								onClick: function () { callRun({ version: v.version, restartDelaySec: 5 }, (v.newer ? "安装 " : "回退到 ") + v.version) },
-							}, v.newer ? "安装此版本" : "回退到此版本") : null,
+								onClick: function () { callRun({ version: v.version, restartDelaySec: 5 }, "安装 " + v.version) },
+							}, "安装此版本") : null,
 						));
 						if (v.notes && open[v.version]) {
 							rows.push(h("div", { className: "dsup-notes", key: v.version + "-notes", dangerouslySetInnerHTML: { __html: v.notes } }));
@@ -134,7 +133,7 @@ window.__ModuleLoader__.load({ id: "dsh-self-upgrade", factory: (require) => {
 						"⏱ 将于 " + ((st.pendingRestart && st.pendingRestart.nextElapse) || "") + " 自动重启服务：当前会话结束、Web UI 闪断数秒。反悔请点下方「取消自动重启」。"
 					) : null,
 					!running && res && res.action === "upgrade" && res.previous && res.installed ? h("div", { className: "dsup-result" },
-						"上次任务：" + res.previous + " → " + res.installed + (res.restartScheduled ? ("，已安排 " + res.restartDelaySec + " 秒后自动重启") : ("；" + (res.restartNote || "未安排重启"))) + compatText
+						"上次任务：" + res.previous + " → " + res.installed + (res.restartScheduled ? ("，已安排 " + res.restartDelaySec + " 秒后自动重启") : ("；" + (res.restartNote || "未安排重启")))
 					) : null,
 					!running && res && res.action === "none" ? h("div", { className: "dsup-result" }, "上次任务：" + res.reason) : null,
 					phase === "failed" && jobError ? h("div", { className: "dsup-banner dsup-banner-err" }, "失败原因：" + jobError) : null,
@@ -155,7 +154,7 @@ window.__ModuleLoader__.load({ id: "dsh-self-upgrade", factory: (require) => {
 							className: "dsup-btn dsup-btn-primary", disabled: busy || running || upToDate || !lat,
 							onClick: function () { callRun({ restartDelaySec: 5 }, "升级到 " + lat) },
 						}, upToDate ? "✓ 已最新" : ("↑ 升级到 " + (lat || "最新官方版"))),
-						h("button", { className: "dsup-btn", disabled: busy, onClick: function () { toggleVers() } }, showVers ? "▾ 收起版本历史" : "▸ 版本历史与回退"),
+						h("button", { className: "dsup-btn", disabled: busy, onClick: function () { toggleVers() } }, showVers ? "▾ 收起版本历史" : "▸ 版本历史"),
 						h("button", {
 							className: "dsup-btn dsup-btn-danger", disabled: busy,
 							onClick: async function () {
@@ -175,7 +174,7 @@ window.__ModuleLoader__.load({ id: "dsh-self-upgrade", factory: (require) => {
 							vers && vers.error ? h("div", { className: "dsup-vrow" }, vers.error) : rows,
 					) : null,
 					showVers ? h("div", { className: "dsup-meta" },
-						"版本历史仅收录官方 GitHub Releases 发布的里程碑；点「官方说明」查看该版更新内容。回退走 备份→重装→校验→兼容化 流程，降级时自动扁平化凭据文件防启动循环。"
+						"版本历史仅收录官方 GitHub Releases 发布的里程碑；点「官方说明」查看该版更新内容。仅高于当前安装版本的版本可以安装（不支持回退）。"
 					) : null,
 					msg ? h("div", { className: "dsup-note" }, msg) : null,
 				);
