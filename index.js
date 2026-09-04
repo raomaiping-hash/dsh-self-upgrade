@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 // dsh-self-upgrade — DSH 本体自升级插件（常驻版）
@@ -13,22 +14,71 @@ export const name = "dsh-self-upgrade";
 // jobs：空闲判定——有后台任务运行时不允许自动重启。
 export const inject = ["shell", "webServer", "tools", "timer", "jobs"];
 
+// ── 部署路径动态解析（不硬编码 node 安装目录）────────────────────
+// 运行中的宿主进程就是本插件的宿主：从 process.execPath 推导其 npm 前缀
+// （<prefix>/bin/node → <prefix>/lib/node_modules/...），并用同一前缀定位 npm
+// CLI。允许环境变量覆盖，便于容器 / 特殊部署显式钉住路径。
+const requireFromPlugin = createRequire(import.meta.url);
+
+function dshGlobalCandidates() {
+  const out = [];
+  if (process.env.DSH_GLOBAL_PKG) out.push(path.resolve(process.env.DSH_GLOBAL_PKG));
+  // Node 常规全局布局：<prefix>/bin/node → <prefix>/lib/node_modules/@deepseek-ai/dsh
+  const prefix = path.dirname(path.dirname(process.execPath));
+  out.push(path.join(prefix, "lib", "node_modules", "@deepseek-ai", "dsh"));
+  out.push(path.join(prefix, "node_modules", "@deepseek-ai", "dsh"));
+  try {
+    const pkg = requireFromPlugin.resolve("@deepseek-ai/dsh/package.json");
+    if (pkg) out.push(path.dirname(pkg));
+  } catch (e) { /* 宿主包不在本插件解析链时忽略 */ }
+  return out;
+}
+
+function resolveDshGlobalDir() {
+  const hit = dshGlobalCandidates().find((p) =>
+    p && fs.existsSync(path.join(p, "package.json")),
+  );
+  if (!hit) {
+    throw new Error(
+      "无法定位全局 @deepseek-ai/dsh 安装目录；请设置 DSH_GLOBAL_PKG（已尝试: " +
+      dshGlobalCandidates().filter(Boolean).join(", ") + "）",
+    );
+  }
+  return hit;
+}
+
+const DSH_GLOBAL_DIR = resolveDshGlobalDir();
+
+function npmCliPath() {
+  const prefix = path.dirname(path.dirname(process.execPath));
+  return path.join(prefix, "lib", "node_modules", "npm", "bin", "npm-cli.js");
+}
+
+/** 返回可执行的 npm 命令（带引号）；优先本机 node 的 npm-cli.js，缺失时退回 PATH。 */
+async function npmExecCmd() {
+  const cli = npmCliPath();
+  if (fs.existsSync(cli)) return "'" + process.execPath + "' '" + cli + "'";
+  const r = await sh("command -v npm 2>/dev/null");
+  const p = (r.stdout || "").trim().split("\n")[0];
+  return p || null;
+}
+
 const CONST = {
-  pkgJson: '/opt/node-v22.23.2-linux-x64/lib/node_modules/@deepseek-ai/dsh/package.json',
+  pkgJson: path.join(DSH_GLOBAL_DIR, "package.json"),
   pkgName: '@deepseek-ai/dsh',
-  proxy: 'http://127.0.0.1:7890',
-  serviceUnit: 'deepseek-harness.service',
-  restartUnit: 'dsh-self-upgrade-restart',
-  backupScript: '/usr/local/bin/dsh-backup.sh',
-  backupDir: '/var/backups/dsh',
+  proxy: process.env.DSH_UPGRADE_PROXY || 'http://127.0.0.1:7890',
+  serviceUnit: process.env.DSH_SERVICE_UNIT || 'deepseek-harness.service',
+  restartUnit: process.env.DSH_RESTART_UNIT || 'dsh-self-upgrade-restart',
+  backupScript: process.env.DSH_BACKUP_SCRIPT || '/usr/local/bin/dsh-backup.sh',
+  backupDir: process.env.DSH_BACKUP_DIR || '/var/backups/dsh',
   registryUrl: 'https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest',
   packumentUrl: 'https://registry.npmjs.org/@deepseek-ai%2Fdsh',
   atomUrl: 'https://github.com/deepseek-ai/deepseek-harness/releases.atom',
   // 源码构建回退：npm registry 尚无目标版本（GitHub 已发 tag）时，
   // 用 build-from-source.py 从 GitHub tag 构建独立部署目录替换全局包。
   gitRepo: 'https://github.com/deepseek-ai/deepseek-harness.git',
-  globalPkgDir: '/opt/node-v22.23.2-linux-x64/lib/node_modules/@deepseek-ai/dsh',
-  srcBuildWorkdir: '/var/tmp/dsh-build',   // 源码+构建缓存根（磁盘，勿放 tmpfs）
+  globalPkgDir: DSH_GLOBAL_DIR,
+  srcBuildWorkdir: process.env.DSH_BUILD_WORKDIR || '/var/tmp/dsh-build',   // 源码+构建缓存根（磁盘，勿放 tmpfs）
 };
 
 const FLATTEN_PY = `import sys, os, yaml
@@ -311,7 +361,7 @@ async function performUpgrade(opts) {
       state.result = { action: 'upgrade', backupPath: (ls.stdout || '').trim() || null, rollbackOf: isDowngrade };
     }
     state.stage = 'install';
-    const npm = await bin('npm', '/opt/node-v22.23.2-linux-x64/bin/npm');
+    const npm = await npmExecCmd();
     const pe = 'http_proxy=' + CONST.proxy + ' https_proxy=' + CONST.proxy + ' HTTP_PROXY=' + CONST.proxy + ' HTTPS_PROXY=' + CONST.proxy + ' no_proxy=localhost,127.0.0.1';
     log('npm install -g ' + CONST.pkgName + '@' + opts.target);
     const inst = await sh('sudo -n env ' + pe + ' ' + npm + ' install -g ' + CONST.pkgName + '@' + opts.target + ' --no-audit --no-fund 2>&1 | tail -20', 900000);
