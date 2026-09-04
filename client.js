@@ -22,7 +22,7 @@ window.__ModuleLoader__.load({ id: "dsh-self-upgrade", factory: (require) => {
 			return r.json();
 		}
 
-		const CSS_EXTRA = ".dsup-ver-badge{display:inline-flex;align-items:center;height:32px;padding:0 12px;border-radius:18px;border:.5px solid var(--dsw-alias-border-l4);color:var(--dsw-alias-label-primary);background:0 0;font-family:var(--ds-font-family-code,ui-monospace,Menlo,Consolas,monospace);font-size:12px;font-weight:500;white-space:nowrap;gap:7px}.dsup-ver-badge .dsup-ver-dot{width:7px;height:7px;border-radius:50%;flex:none;background:#22c55e}.dsup-ver-badge.dsup-ver-new{color:#d97706;border-color:rgba(245,158,11,.5)}.dsup-ver-badge.dsup-ver-new .dsup-ver-dot{background:#f59e0b}.dsup-foot-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;min-width:34px;padding:0 11px;border-radius:9px;border:1px solid #dc2626;background:#dc2626;color:#fff;cursor:pointer;font-size:12px;font-weight:500;line-height:1;transition:background .12s ease,transform .1s ease}.dsup-foot-btn:hover:not(:disabled){background:#b91c1c}.dsup-foot-btn:active:not(:disabled){transform:translateY(1px)}.dsup-foot-btn:disabled{opacity:.55;cursor:wait}.dsup-foot-icon{flex:none;display:inline-flex}.dsup-foot-wrap{position:relative;display:inline-flex;align-items:center}.dsup-foot-msg{position:absolute;left:calc(100% + 8px);top:50%;transform:translateY(-50%);white-space:nowrap;font-size:12px;line-height:1;color:#16a34a;background:rgba(255,255,255,.95);border:1px solid rgba(22,163,74,.3);border-radius:7px;padding:4px 9px;box-shadow:0 2px 10px rgba(0,0,0,.14);pointer-events:none;z-index:30}.dsup-foot-msg-err{color:#dc2626;border-color:rgba(220,38,38,.35)}.dsup-foot-armed{outline:2px solid rgba(220,38,38,.55);outline-offset:1px}.hHd-Xa_root:not(.hHd-Xa_collapsed) .hHd-Xa_footArea{flex-direction:row!important;align-items:center!important;gap:8px;justify-content:flex-start}.hHd-Xa_root:not(.hHd-Xa_collapsed) .hHd-Xa_settingsArea{order:0;flex:none;width:auto;min-width:0}.hHd-Xa_root:not(.hHd-Xa_collapsed) .hHd-Xa_footerActions{order:1;flex:none;width:auto;display:flex;align-items:center;gap:6px}";
+		const CSS_EXTRA = ".dsup-hdr{display:inline-flex;align-items:center;gap:8px}.dsup-ver-badge{display:inline-flex;align-items:center;height:32px;padding:0 12px;border-radius:18px;border:.5px solid var(--dsw-alias-border-l4);color:var(--dsw-alias-label-primary);background:0 0;font-family:var(--ds-font-family-code,ui-monospace,Menlo,Consolas,monospace);font-size:12px;font-weight:500;white-space:nowrap;gap:7px}.dsup-ver-badge .dsup-ver-dot{width:7px;height:7px;border-radius:50%;flex:none;background:#22c55e}.dsup-ver-badge.dsup-ver-new{color:#d97706;border-color:rgba(245,158,11,.5)}.dsup-ver-badge.dsup-ver-new .dsup-ver-dot{background:#f59e0b}.dsup-foot-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;min-width:0;padding:0 10px;border-radius:9px;border:1px solid #dc2626;background:#dc2626;color:#fff;cursor:pointer;font-size:12px;font-weight:500;line-height:1;white-space:nowrap;transition:background .12s ease,transform .1s ease}.dsup-foot-btn:hover:not(:disabled){background:#b91c1c}.dsup-foot-btn:active:not(:disabled){transform:translateY(1px)}.dsup-foot-btn:disabled{opacity:.55;cursor:wait}.dsup-foot-icon{flex:none;display:inline-flex}.dsup-foot-wrap{position:relative;display:inline-flex;align-items:center}.dsup-foot-msg{position:absolute;right:0;top:calc(100% + 8px);white-space:nowrap;font-size:12px;line-height:1;color:#16a34a;background:rgba(255,255,255,.95);border:1px solid rgba(22,163,74,.3);border-radius:7px;padding:4px 9px;box-shadow:0 2px 10px rgba(0,0,0,.14);pointer-events:none;z-index:30}.dsup-foot-msg-err{color:#dc2626;border-color:rgba(220,38,38,.35)}.dsup-foot-armed{outline:2px solid rgba(220,38,38,.55);outline-offset:1px}";
 
 		function apply(ctx) {
 			ctx.effect(() => {
@@ -180,29 +180,8 @@ window.__ModuleLoader__.load({ id: "dsh-self-upgrade", factory: (require) => {
 				);
 			}
 
-			// 右上角版本徽标：会话头 utilities（Session 日志 右侧）。
-			function VersionBadge() {
-				const [st, setSt] = useState(null);
-				const refresh = useCallback(async function () {
-					try { setSt(await api("/api/dsh-upgrade/status")) } catch (e) {}
-				}, []);
-				useEffect(function () { refresh() }, [refresh]);
-				useEffect(function () { return ctx.interval(refresh, 60000) }, [refresh]);
-				const cur = st ? st.installedVersion : "";
-				const lat = st ? st.latestVersion : null;
-				const upToDate = !!(st && st.upToDate);
-				return h("span", {
-					className: "dsup-ver-badge" + (upToDate ? " dsup-ver-ok" : " dsup-ver-new"),
-					title: "DSH 版本 v" + (cur || "…") + (lat && !upToDate ? "（可升级到 " + lat + "）" : ""),
-				}, h("span", { className: "dsup-ver-dot" }), cur ? ("v" + cur) : "…");
-			}
-			ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
-				name: "conversation.session.header.utilities",
-				id: "dsup-version",
-				order: 100,
-			}, () => h(VersionBadge)));
-
-			// 侧边栏底部「设置」旁的重启按钮（footer.action 在设置上方一行）。
+			// 重启按钮：两步式确认（Web GUI 会静默吞掉 window.confirm），
+			// 渲染在右上角版本徽标右侧。
 			function RestartFooter(props) {
 				const wide = !!(props && props.wide);
 				const [busy, setBusy] = useState(false);
@@ -211,8 +190,6 @@ window.__ModuleLoader__.load({ id: "dsh-self-upgrade", factory: (require) => {
 				const [kind, setKind] = useState("");
 				function onClick() {
 					if (busy) return;
-					// window.confirm 在 Web GUI 上下文会被静默禁止（总是返回 false），
-					// 导致点按钮毫无反应。改用两步式：第一次点击进入「确认」态并给可见反馈。
 					if (!armed) {
 						setArmed(true);
 						setMsg("再点一次确认重启");
@@ -251,11 +228,33 @@ window.__ModuleLoader__.load({ id: "dsh-self-upgrade", factory: (require) => {
 					wide && msg ? h("span", { className: "dsup-foot-msg" + (kind === "err" ? " dsup-foot-msg-err" : kind === "ok" ? " dsup-foot-msg-ok" : "") }, msg) : null,
 				);
 			}
-			ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
-				name: "sidebar.footer.action",
-				id: "dsup-restart",
+
+			// 右上角版本徽标：会话头 utilities（Session 日志 右侧）。
+			function VersionBadge() {
+				const [st, setSt] = useState(null);
+				const refresh = useCallback(async function () {
+					try { setSt(await api("/api/dsh-upgrade/status")) } catch (e) {}
+				}, []);
+				useEffect(function () { refresh() }, [refresh]);
+				useEffect(function () { return ctx.interval(refresh, 60000) }, [refresh]);
+				const cur = st ? st.installedVersion : "";
+				const lat = st ? st.latestVersion : null;
+				const upToDate = !!(st && st.upToDate);
+				return h("span", {
+					className: "dsup-ver-badge" + (upToDate ? " dsup-ver-ok" : " dsup-ver-new"),
+					title: "DSH 版本 v" + (cur || "…") + (lat && !upToDate ? "（可升级到 " + lat + "）" : ""),
+				}, h("span", { className: "dsup-ver-dot" }), cur ? ("v" + cur) : "…");
+			}
+			ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
+				name: "conversation.session.header.utilities",
+				id: "dsup-version",
 				order: 100,
-			}, (owner) => h(RestartFooter, { wide: owner && owner.wide })));
+			}, () => h("span", { className: "dsup-hdr" },
+				h(VersionBadge),
+				h(RestartFooter, { wide: true }),
+			)));
+
+			// 重启按钮已并入上方版本徽标右侧（header.utilities），不再占用侧边栏 footer。
 
 			ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
 				name: "settings.plugins.tab",
