@@ -1,24 +1,24 @@
 <h1 align="center">dsh-self-upgrade</h1>
 
-<p align="center">DeepSeek Harness 本体自升级插件：检测官方新版、自动备份、一键升级/回退；自动更新等待系统空闲才重启，不打断进行中的会话。</p>
+<p align="center">DeepSeek Harness 本体自升级插件：检测官方新版、自动备份、一键升级；自动更新等待系统空闲才重启，不打断进行中的会话。</p>
 
 <p align="center"><a href="#capabilities">Capabilities</a> · <a href="#install">Install</a> · <a href="#how-auto-update-works">Auto-update</a> · <a href="#security-model">Security</a> · <a href="README.zh.md">中文说明</a></p>
 
-An in-place self-upgrade plugin for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) agent. It detects new official versions from GitHub Releases, backs up your data, upgrades or rolls back the globally installed `@deepseek-ai/dsh` package, and restarts the service — with an idle-aware auto-update mode that never interrupts a running session.
+An in-place self-upgrade plugin for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) agent. It detects new official versions from GitHub Releases, backs up your data, upgrades the globally installed `@deepseek-ai/dsh` package to a newer official version (npm install, or source build when npm lacks the tag), and restarts the service — with an idle-aware auto-update mode that never interrupts a running session. Downgrade/rollback is intentionally not supported.
 
 ## Capabilities
 
 | Tool | Description |
 | --- | --- |
 | `dsh_upgrade_status` | Installed vs latest official version, upgrade job progress, pending restart state, log tail |
-| `dsh_upgrade_run` | Upgrade / rollback / reinstall: backup → npm install → verify → (downgrade) credential compat flatten → delayed restart |
+| `dsh_upgrade_run` | Upgrade / reinstall: backup → npm install (source build when npm lacks the tag) → verify → delayed restart |
 | `dsh_upgrade_cancel_restart` | Cancel a pending scheduled restart or an idle-waiting auto restart |
 | `dsh_upgrade_versions` | List official released versions with dates, current/newer markers and release notes |
 
 | Panel（设置 → 插件 → DSH 本体升级） | Description |
 | --- | --- |
 | Version header | Installed → latest, status pill（已是最新 / 可升级 / 进行中 / 失败） |
-| Actions | 检查更新 · 自动更新开关 · 一键升级 · 版本历史与回退 · 立即重启 · 取消挂起重启 |
+| Actions | 检查更新 · 自动更新开关 · 一键升级 · 版本历史（浏览） · 立即重启 · 取消挂起重启 |
 | Progress | 升级任务实时阶段进度条 |
 
 ## Install
@@ -32,7 +32,7 @@ dsh plugin --profile web add github:raomaiping-hash/dsh-self-upgrade
 Pin a version for reproducibility:
 
 ```sh
-dsh plugin --profile web add github:raomaiping-hash/dsh-self-upgrade#v1.0.0
+dsh plugin --profile web add github:raomaiping-hash/dsh-self-upgrade#v1.1.1
 ```
 
 Then restart the web profile (`sudo systemctl restart deepseek-harness` or your equivalent). A new “DSH 本体升级” tab appears under Settings → Plugins, and four `dsh_upgrade_*` tools become available to the agent.
@@ -46,9 +46,7 @@ When enabled (panel toggle), every 30 minutes the plugin:
 3. Starts an idle watcher (every 15 s): restart fires only when no background job is running **and** session logs have been quiet for 2 minutes;
 4. On idle it schedules the service restart immediately. Cancel anytime with `dsh_upgrade_cancel_restart`.
 
-Manual upgrades keep explicit control: you choose the delay, default 5 seconds.
-
-Downgrades automatically flatten `.credentials.yaml` into a format both old and new builds accept, preventing boot loops caused by config-format migration.
+Manual upgrades keep explicit control: you choose the delay, default 5 seconds. Only versions newer than the installed one can be installed; rollback is not supported.
 
 ## Security model
 

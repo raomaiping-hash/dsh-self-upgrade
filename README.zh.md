@@ -1,24 +1,24 @@
 <h1 align="center">dsh-self-upgrade</h1>
 
-<p align="center">DeepSeek Harness 本体自升级插件：检测官方新版、自动备份、一键升级/回退；自动更新等待系统空闲才重启，不打断进行中的会话。</p>
+<p align="center">DeepSeek Harness 本体自升级插件：检测官方新版、自动备份、一键升级；自动更新等待系统空闲才重启，不打断进行中的会话。</p>
 
 <p align="center"><a href="#功能">功能</a> · <a href="#安装">安装</a> · <a href="#自动更新机制">自动更新机制</a> · <a href="#安全模型">安全模型</a> · <a href="README.md">English</a></p>
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) agent 的原地自升级插件：从 GitHub Releases 检测官方新版，自动备份数据，升级/回退全局安装的 `@deepseek-ai/dsh` 包并重启服务——自动更新模式会**等待系统空闲**才重启，绝不打断进行中的会话。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) agent 的原地自升级插件：从 GitHub Releases 检测官方新版，自动备份数据，把全局安装的 `@deepseek-ai/dsh` 升级到更高的官方版本（npm 安装；registry 缺 tag 时转源码构建）并重启服务——自动更新模式会**等待系统空闲**才重启，绝不打断进行中的会话。刻意不支持降级/回退。
 
 ## 功能
 
 | 模型工具 | 说明 |
 | --- | --- |
 | `dsh_upgrade_status` | 已装版本 vs 官方最新版、升级任务进度、挂起重启状态、日志尾部 |
-| `dsh_upgrade_run` | 升级 / 回退 / 重装：备份 → npm 安装 → 校验 →（降级）凭据兼容化 → 延迟重启 |
+| `dsh_upgrade_run` | 升级 / 重装：备份 → npm 安装（registry 缺目标 tag 时转源码构建）→ 校验 → 延迟重启 |
 | `dsh_upgrade_cancel_restart` | 取消挂起的定时重启或正在等空闲的自动重启 |
 | `dsh_upgrade_versions` | 列出官方发布过的版本（日期、当前/更新标记、官方更新说明） |
 
 | 面板（设置 → 插件 → DSH 本体升级） | 说明 |
 | --- | --- |
 | 版本头 | 已装 → 最新，状态徽章（已是最新 / 可升级 / 进行中 / 失败） |
-| 操作 | 检查更新 · 自动更新开关 · 一键升级 · 版本历史与回退 · 立即重启 · 取消挂起重启 |
+| 操作 | 检查更新 · 自动更新开关 · 一键升级 · 版本历史（浏览） · 立即重启 · 取消挂起重启 |
 | 进度 | 升级任务实时阶段进度条 |
 
 ## 安装
@@ -32,7 +32,7 @@ dsh plugin --profile web add github:raomaiping-hash/dsh-self-upgrade
 可复现安装请锁定版本：
 
 ```sh
-dsh plugin --profile web add github:raomaiping-hash/dsh-self-upgrade#v1.0.0
+dsh plugin --profile web add github:raomaiping-hash/dsh-self-upgrade#v1.1.1
 ```
 
 随后重启 web profile（`sudo systemctl restart deepseek-harness` 或等效命令）。设置 → 插件 下出现「DSH 本体升级」标签页，agent 获得 4 个 `dsh_upgrade_*` 工具。
@@ -46,9 +46,7 @@ dsh plugin --profile web add github:raomaiping-hash/dsh-self-upgrade#v1.0.0
 3. 启动空闲观察器（每 15 秒）：仅当**无后台任务运行且会话日志已静默 2 分钟**才判定空闲；
 4. 空闲立即安排服务重启。随时可用 `dsh_upgrade_cancel_restart` 取消。
 
-手动升级保持完全控制：延迟自选，默认 5 秒。
-
-降级时自动把 `.credentials.yaml` 扁平化为新旧版本通用的格式，防止配置格式迁移导致的启动循环。
+手动升级保持完全控制：延迟自选，默认 5 秒。仅允许安装高于当前安装版本的官方发布版，不支持回退。
 
 ## 安全模型
 
