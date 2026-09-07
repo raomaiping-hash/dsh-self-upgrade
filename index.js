@@ -115,10 +115,16 @@ function log(msg) {
 }
 
 async function sh(command, timeoutMs, maxBytes) {
-  const r = await shell.run({
+  // 0.1.3-alpha.2: ctx.shell.run 接收已 resolve 的 spec(workdir 等缺省字段必须
+  // 由 executor.resolve() 补齐);直接传 request 会让 options.cwd=undefined,
+  // 在宿主 dsh-subprocess-local validateNoNullByte 抛
+  // "Cannot read properties of undefined (reading 'includes')"。
+  const request = {
     command, timeoutMs: timeoutMs || 30000, stdoutMaxBytes: maxBytes || 262144,
     sandboxPolicy: { mode: 'danger-full-access', workspaceRoot: '/' },
-  });
+  };
+  const spec = typeof shell.resolve === 'function' ? shell.resolve(request) : request;
+  const r = await shell.run(spec);
   const textOf = (o) => (o && typeof o === 'object') ? String(o.text || '') : String(o || '');
   return {
     exitCode: r ? r.exitCode : null,
@@ -653,6 +659,7 @@ export function apply(ctx, config) {
           const body = req.method === 'POST' ? await readJsonBody(req) : {};
           json(res, 200, await fn(body));
         } catch (e) {
+          console.error('[dsh-self-upgrade] route error:', e && (e.stack || e));
           json(res, 500, { error: String((e && e.message) || e) });
         }
       },

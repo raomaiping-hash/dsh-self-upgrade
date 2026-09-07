@@ -1,6 +1,6 @@
 {
   "name": "dsh-self-upgrade",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "In-place self-upgrade for the DeepSeek Harness agent: official GitHub Releases detection with notes, automatic backup, npm upgrade or source-build install (upgrade only, no rollback), idle-aware auto-restart, model tools plus a settings panel.",
   "type": "module",
   "main": "index.js",
