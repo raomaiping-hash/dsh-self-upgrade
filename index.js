@@ -343,15 +343,19 @@ async function performUpgrade(opts) {
     state.result = Object.assign(state.result || { action: 'upgrade' }, { previous: cur, installed: now });
     if (!opts.skipRestart) {
       state.stage = 'restart-schedule';
-      const ok = await scheduleRestart(delay);
+      // opts 由 planUpgrade 构造并已 clamp 到 2–600s；此前这里直接引用未定义的
+      // 局部变量 delay，导致 0.1.3-alpha.2 → 0.1.5-alpha.1 升级在校验通过后
+      // 报 "FAILED: delay is not defined"、磁盘已升级却未安排重启。
+      const restartDelaySec = Math.max(2, Math.min(600, Number(opts.restartDelaySec) || 5));
+      const ok = await scheduleRestart(restartDelaySec);
       if (!ok) {
         state.result.restartScheduled = false;
         state.result.restartNote = 'systemd-run 失败，请手动重启: sudo systemctl restart ' + CONST.serviceUnit;
         log(state.result.restartNote);
       } else {
         state.result.restartScheduled = true;
-        state.result.restartDelaySec = delay;
-        log('已安排 ' + delay + ' 秒后重启 ' + CONST.serviceUnit);
+        state.result.restartDelaySec = restartDelaySec;
+        log('已安排 ' + restartDelaySec + ' 秒后重启 ' + CONST.serviceUnit);
       }
     }
     state.phase = 'idle'; state.stage = '';
