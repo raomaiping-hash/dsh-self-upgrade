@@ -173,6 +173,29 @@ async function installedVersion() {
   try { return JSON.parse(r.stdout).version || null } catch (e) { return null }
 }
 
+/**
+ * 幂等核对 prefix/bin/dsh 入口链接。
+ * npm 在更新 bin 时先写 .dsh-XXXX 临时链接、成功后才重命名为 dsh；进程被中断
+ * 就停在临时名，`dsh` 命令从此消失（systemd ExecStart 用的就是它）。缺失时按
+ * npm 的默认布局重建软链。
+ */
+async function ensureLauncherLink() {
+  try {
+    // 与 dshGlobalCandidates 同口径：node 全局布局的 prefix 就是 execPath 的上两级。
+    const prefix = path.dirname(path.dirname(process.execPath));
+    const link = path.join(prefix, 'bin', 'dsh');
+    const rel = path.join('..', 'lib', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+    const sq = (s) => "'" + String(s).split("'").join("'\\''") + "'";
+    const probe = await sh('sudo -n sh -c ' + sq('test -x ' + sq(link) + ' && echo OK || echo MISSING'), 20000);
+    if ((probe.stdout || '').indexOf('OK') >= 0) return { ok: true, fixed: false, path: link };
+    const fix = await sh('sudo -n sh -c ' + sq('ln -sfn ' + sq(rel) + ' ' + sq(link) + ' && echo FIXED'), 20000);
+    if ((fix.stdout || '').indexOf('FIXED') >= 0) return { ok: true, fixed: true, path: link };
+    return { ok: false, fixed: false, path: link, reason: (fix.stderr || fix.stdout || '').slice(0, 200) };
+  } catch (e) {
+    return { ok: false, fixed: false, path: '', reason: String((e && e.message) || e) };
+  }
+}
+
 async function fetchLatest() {
   const curl = await bin('curl', '/usr/bin/curl');
   let r = await sh(curl + " -sS -m 12 -x " + CONST.proxy + " '" + CONST.registryUrl + "'", 20000);
@@ -329,7 +352,16 @@ async function performUpgrade(opts) {
         state.result = Object.assign(state.result || { action: 'upgrade' }, { installMode: 'source-build', backupPkg: bak });
         log('源码构建部署完成: ' + built.deployDir);
       } else {
-        throw new Error('npm 安装失败(exit ' + inst.exitCode + ')：' + instOut.slice(-400));
+        // npm 被超时/信号中断时命令不会返回，但磁盘往往已经装完（0.1.5-rc.2
+        // 升级实测：exitCode=null、输出为空，磁盘却已是目标版本）。先核对版本
+        // 再决定失败，别把已经装好的升级判成 FAILED。
+        const after = await installedVersion();
+        if (after && cmpVer(after, opts.target) === 0) {
+          log('npm 未正常返回（' + (inst.timedOut ? '超时' : 'exit ' + inst.exitCode) + '），但磁盘已是 ' + after + '，按成功继续');
+        } else {
+          const why = inst.timedOut ? '超时' : ('exit ' + inst.exitCode);
+          throw new Error('npm 安装失败(' + why + ')：' + instOut.slice(-400));
+        }
       }
     } else {
       log('npm 尾部输出: ' + (inst.stdout || '').slice(-160).replace(/\s+/g, ' '));
@@ -340,7 +372,18 @@ async function performUpgrade(opts) {
       throw new Error('升级后校验失败：磁盘版本 ' + now + ' ≠ 目标 ' + opts.target + '。如需恢复当前版本，可手动执行: sudo env ' + pe + ' ' + npm + ' i -g ' + CONST.pkgName + '@' + cur);
     }
     log('校验通过: ' + now);
-    state.result = Object.assign(state.result || { action: 'upgrade' }, { previous: cur, installed: now });
+    // npm 更新 prefix/bin 的流程是"先建 .dsh-XXXX 临时链接、再重命名"；进程中途
+    // 被杀就停在临时名（0.1.5-rc.2 升级实测），dsh 命令随即消失，而 systemd 的
+    // ExecStart 正是 /usr/local/bin/dsh —— 下一次重启就再也起不来。每次核一遍。
+    const launcher = await ensureLauncherLink();
+    if (launcher.fixed) log('启动器链接已修复: ' + launcher.path);
+    else if (!launcher.ok) log('启动器链接异常: ' + (launcher.reason || launcher.path));
+    else log('启动器链接正常: ' + launcher.path);
+    state.result = Object.assign(state.result || { action: 'upgrade' }, {
+      previous: cur,
+      installed: now,
+      launcher: launcher.fixed ? 'fixed' : launcher.ok ? 'ok' : 'broken',
+    });
     if (!opts.skipRestart) {
       state.stage = 'restart-schedule';
       // opts 由 planUpgrade 构造并已 clamp 到 2–600s；此前这里直接引用未定义的
@@ -519,6 +562,9 @@ function readJsonBody(req) {
     req.on('error', reject);
   });
 }
+
+// 供运维/测试手动核对启动器链接（升级流程里也会幂等执行）。
+export { ensureLauncherLink };
 
 export function apply(ctx, config) {
   shell = ctx.shell;
